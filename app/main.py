@@ -8,6 +8,7 @@ GET    /api/runs                     list saved runs
 GET    /api/runs/{id}                one run with its queue and summary
 POST   /api/runs/{id}/feedback       reviewer marks a queued page as declined or not
 DELETE /api/runs/{id}                delete a run
+GET    /api/runs/{id}/queue.csv      the queue as CSV, with reviewer answers
 GET    /api/template.csv             empty CSV with the expected columns
 """
 import io
@@ -129,7 +130,8 @@ async def create_run(file: UploadFile = File(...), k: int = Form(50), per_client
     if "observed" in raw.columns:
         scored["observed"] = [None if pd.isna(v) else int(v) for v in raw["observed"]]
     q = build_queue(scored, k=k, per_client=per_client)
-    run_id = db.create_run(file.filename or "upload.csv", len(raw), k, per_client, q.to_dict(orient="records"))
+    base = float(raw["observed"].dropna().mean()) if "observed" in raw.columns and raw["observed"].notna().any() else None
+    run_id = db.create_run(file.filename or "upload.csv", len(raw), k, per_client, q.to_dict(orient="records"), base)
     return db.get_run(run_id)
 
 
@@ -144,6 +146,19 @@ def run(run_id: int) -> dict:
     if found is None:
         raise HTTPException(status_code=404, detail="no such run")
     return found
+
+
+@app.get("/api/runs/{run_id}/queue.csv", response_class=PlainTextResponse)
+def run_csv(run_id: int):
+    found = db.get_run(run_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such run")
+    rows = [{"rank": r["rank"], "content_id": r["content_id"], "client_id": r["client_id"], "score": r["score"],
+             "band": r["band"], "reasons": "; ".join(r["reasons"]), "review_flags": "; ".join(r["review_flags"]),
+             "reviewer_declined": r["feedback"]} for r in found["results"]]
+    body = pd.DataFrame(rows).astype({"reviewer_declined": "Int64"}).to_csv(index=False)
+    return PlainTextResponse(body, media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="run-{run_id}-queue.csv"'})
 
 
 class Feedback(BaseModel):

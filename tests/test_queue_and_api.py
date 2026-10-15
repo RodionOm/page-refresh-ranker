@@ -85,6 +85,8 @@ def test_upload_creates_a_saved_run(client):
     assert len(run["results"]) == 10
     assert pd.Series([x["client_id"] for x in run["results"]]).value_counts().max() <= 3
     assert run["summary"]["precision_observed"] is not None      # the demo file has an outcome column
+    s = run["summary"]
+    assert 0 < s["file_base_rate"] < 1 and s["lift"] == round(s["precision_observed"] / s["file_base_rate"], 2)
     listed = client.get("/api/runs").json()
     assert [x["id"] for x in listed] == [run["id"]]
 
@@ -131,3 +133,27 @@ def test_website_and_template_are_served(client):
     assert "Page Refresh Ranker" in client.get("/").text
     assert client.get("/api/template.csv").text.startswith("content_id,client_id,")
     assert client.get("/demo_pages.csv").status_code == 200
+
+
+def test_queue_can_be_downloaded_as_csv(client):
+    run = upload(client, csv_bytes()).json()
+    first = run["results"][0]["content_id"]
+    client.post(f"/api/runs/{run['id']}/feedback", json={"content_id": first, "declined": True})
+    r = client.get(f"/api/runs/{run['id']}/queue.csv")
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    lines = r.text.strip().splitlines()
+    assert lines[0].startswith("rank,content_id,client_id,score,band")
+    assert len(lines) == 1 + len(run["results"]) and lines[1].endswith(",1")
+    assert client.get("/api/runs/999/queue.csv").status_code == 404
+
+
+def test_old_database_is_migrated(tmp_path, monkeypatch):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, filename TEXT NOT NULL,"
+                " n_pages INTEGER NOT NULL, k INTEGER NOT NULL, per_client INTEGER NOT NULL)")
+    con.commit(); con.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    run_id = db.create_run("x.csv", 1, 1, 1, [], 0.5)
+    assert db.get_run(run_id)["base_rate_observed"] == 0.5
