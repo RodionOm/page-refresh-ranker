@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Page Refresh Ranker</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%223%22 fill=%22%231f6feb%22/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Page Refresh Ranker</h1>
+      <p class="sub">Upload page metrics. Get the pages a reviewer should check first, with reasons.</p>
+    </div>
+    <span id="model-badge" class="badge">checking model…</span>
+  </header>
+
+  <main class="layout">
+    <aside class="side">
+      <section class="card">
+        <h2>New run</h2>
+        <form id="upload-form">
+          <label for="file">CSV file</label>
+          <input id="file" name="file" type="file" accept=".csv" required>
+          <div class="row">
+            <div>
+              <label for="k">Queue size</label>
+              <input id="k" name="k" type="number" min="1" max="500" value="50">
+            </div>
+            <div>
+              <label for="per_client">Max per client</label>
+              <input id="per_client" name="per_client" type="number" min="1" max="50" value="5">
+            </div>
+          </div>
+          <button type="submit" class="primary">Rank pages</button>
+        </form>
+        <p class="links">
+          <a href="/api/template.csv" download="template.csv">CSV template</a> ·
+          <a href="/demo_pages.csv" download="demo_pages.csv">demo file (synthetic)</a> ·
+          <a href="/docs">API docs</a>
+        </p>
+        <p id="upload-error" class="error" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2>Saved runs</h2>
+        <ul id="runs" class="runs"><li class="muted">No runs yet.</li></ul>
+      </section>
+    </aside>
+
+    <section class="content">
+      <div id="empty" class="card empty">
+        <h2>How it works</h2>
+        <ol>
+          <li>Each row is one page: traffic for days 61–90 and 31–60 before today, plus page details. The last 30 days are never used, so the score can't peek at the answer.</li>
+          <li>The model scores how likely each page is to lose more than 20% of its impressions.</li>
+          <li>You get a queue with at most a few pages per client, two plain reasons per page, and flags where a human should look twice.</li>
+          <li>Mark what you found after review. The run shows how many queued pages really declined.</li>
+        </ol>
+      </div>
+
+      <div id="run" hidden>
+        <div class="run-head">
+          <h2 id="run-title"></h2>
+          <button id="delete-run" class="ghost">Delete run</button>
+        </div>
+        <div id="tiles" class="tiles"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>Page</th><th>Client</th><th>Score</th><th>Why</th><th>Check</th><th>After review</th></tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Decision support only: a high score means similar pages declined, not that a refresh will stop the decline.</footer>
+  <script src="/app.js"></script>
+</body>
+</html>
