@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS runs (
     filename    TEXT    NOT NULL,
     n_pages     INTEGER NOT NULL CHECK (n_pages > 0),
     k           INTEGER NOT NULL,
-    per_client  INTEGER NOT NULL
+    per_client  INTEGER NOT NULL,
+    base_rate_observed REAL                -- share of ALL uploaded pages that declined, if the file has the outcome
 );
 CREATE TABLE IF NOT EXISTS results (
     run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -46,6 +47,13 @@ def _now() -> str:
 _ready: set[str] = set()
 
 
+def _migrate(con) -> None:
+    """Databases made by version 2.0 have no base_rate_observed column: add it instead of failing."""
+    cols = {row["name"] for row in con.execute("PRAGMA table_info(runs)")}
+    if "base_rate_observed" not in cols:
+        con.execute("ALTER TABLE runs ADD COLUMN base_rate_observed REAL")
+
+
 @contextmanager
 def connect():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
@@ -54,6 +62,7 @@ def connect():
     con.execute("PRAGMA foreign_keys = ON")
     if DB_PATH not in _ready:                 # create tables on first use of this database file
         con.executescript(SCHEMA)
+        _migrate(con)
         _ready.add(DB_PATH)
     try:
         yield con
@@ -65,11 +74,12 @@ def connect():
         con.close()
 
 
-def create_run(filename: str, n_pages: int, k: int, per_client: int, rows: list[dict]) -> int:
+def create_run(filename: str, n_pages: int, k: int, per_client: int, rows: list[dict],
+               base_rate_observed: float | None = None) -> int:
     """One transaction: the run and all its result rows are saved together or not at all."""
     with connect() as con:
-        cur = con.execute("INSERT INTO runs (created_at, filename, n_pages, k, per_client) VALUES (?, ?, ?, ?, ?)",
-                          (_now(), filename, n_pages, k, per_client))
+        cur = con.execute("INSERT INTO runs (created_at, filename, n_pages, k, per_client, base_rate_observed) "
+                          "VALUES (?, ?, ?, ?, ?, ?)", (_now(), filename, n_pages, k, per_client, base_rate_observed))
         run_id = cur.lastrowid
         con.executemany(
             "INSERT INTO results (run_id, rank, content_id, client_id, score, band, reasons, flags, observed) "
@@ -83,7 +93,8 @@ def list_runs() -> list[dict]:
     with connect() as con:
         rows = con.execute("""
             SELECT r.id, r.created_at, r.filename, r.n_pages, r.k, r.per_client,
-                   COUNT(f.content_id) AS reviewed
+                   COUNT(f.content_id) AS reviewed,
+                   (SELECT COUNT(*) FROM results x WHERE x.run_id = r.id) AS queue_size
             FROM runs r
             LEFT JOIN feedback f ON f.run_id = r.id
             GROUP BY r.id
@@ -110,18 +121,22 @@ def get_run(run_id: int) -> dict | None:
         d["reasons"], d["review_flags"] = json.loads(d.pop("reasons")), json.loads(d.pop("flags"))
         d.pop("run_id")
         results.append(d)
-    return {**dict(run), "results": results, "summary": summarise(results)}
+    run = dict(run)
+    return {**run, "results": results, "summary": summarise(results, run["base_rate_observed"])}
 
 
-def summarise(results: list[dict]) -> dict:
+def summarise(results: list[dict], base_rate: float | None = None) -> dict:
     reviewed = [r["feedback"] for r in results if r["feedback"] is not None]
     observed = [r["observed"] for r in results if r["observed"] is not None]
+    precision_observed = round(sum(observed) / len(observed), 2) if observed else None
     return {
         "queue_size": len(results),
         "reviewed": len(reviewed),
         "reviewed_declined": sum(reviewed),
         "precision_from_feedback": round(sum(reviewed) / len(reviewed), 2) if reviewed else None,
-        "precision_observed": round(sum(observed) / len(observed), 2) if observed else None,
+        "precision_observed": precision_observed,
+        "file_base_rate": None if base_rate is None else round(base_rate, 2),
+        "lift": round(precision_observed / base_rate, 2) if precision_observed is not None and base_rate else None,
     }
 
 

@@ -17,12 +17,13 @@ flowchart LR
 ![Review queue on synthetic demo data](docs/screenshot.png)
 
 1. Start the app (see below) and open <http://127.0.0.1:8000>.
-2. Upload a CSV with one row per page. Download the **CSV template** or the **demo file** (synthetic) from the page.
+2. Upload a CSV with one row per page (drag and drop works), or click **Try with demo data**. The **CSV template** shows the expected columns.
 3. Choose the queue size and the maximum pages per client, then **Rank pages**.
 4. Review the queue. Each row shows the score and band, the reasons and any review flags.
-5. After checking a page, click **declined** or **held up**. The run's summary updates. If the CSV has a `declined_observed` column (the holdout file does), the app also shows the true decline rate of the queue.
+5. After checking a page, click **Declined** or **Held up**. The run's summary updates. If the CSV has a `declined_observed` column (the holdout and demo files do), the app also shows how many queued pages really declined, against the decline rate of the whole file (lift over a random pick).
+6. **Download queue CSV** exports the queue with reasons, flags and the reviewer's answers.
 
-Every run is saved and listed under **Saved runs**.
+Every run is saved and listed under **Saved runs**; the latest run opens when you come back.
 
 ## API
 
@@ -36,6 +37,7 @@ Every run is saved and listed under **Saved runs**.
 | GET | `/api/runs/{id}` | one run: its queue and summary |
 | POST | `/api/runs/{id}/feedback` | `{content_id, declined}`; changing an answer updates it |
 | DELETE | `/api/runs/{id}` | delete a run with its results and feedback |
+| GET | `/api/runs/{id}/queue.csv` | the queue as CSV, with reviewer answers |
 | GET | `/api/template.csv` | the expected CSV columns |
 
 Interactive API docs: `/docs`.
@@ -47,7 +49,7 @@ Interactive API docs: `/docs`.
 - **Logistic regression on purpose.** In the internship it beat gradient boosting at the top of the list on unseen clients, and its weights give readable reasons (standardised value × coefficient).
 - **Fixed feature columns.** Categories come from fixed lists, so one page at serving time produces the same 23 columns as training. The saved model stores its feature list and refuses to load if it does not match.
 - **One validation path.** CSV rows go through the same Pydantic schema as JSON requests. Errors name the row and the field.
-- **Plain SQL with transactions.** A run and all its results are written in one transaction. Feedback is an upsert. Deleting a run cascades to its results and feedback.
+- **Plain SQL with transactions.** A run and all its results are written in one transaction. Feedback is an upsert. Deleting a run cascades to its results and feedback. A database made by an older version gets its new column added on start instead of failing.
 - **Bands are ordered, not calibrated.** In the internship data the "high" band declined about 69% of the time.
 
 ## Run it locally
