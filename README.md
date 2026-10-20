@@ -110,3 +110,7 @@ The model is trained on the anonymised starter export from the FlyRank AI ML int
 - Mid-traffic pages are ranked close to chance (AUC about 0.57–0.59 in the internship analysis).
 - A high score means similar pages declined, not that a refresh will stop the decline.
 - No user accounts or authentication.
+
+## Input and ranking safeguards
+
+CSV uploads are limited to 10 MiB and 20,000 rows. Outcome labels must be 0, 1, or blank; duplicate page IDs are rejected before storage. JSON and CSV reject blank IDs. Ranking uses full-precision scores, and reason wording follows the actual feature deviation from the training mean. Tests run on synthetic data and do not establish real-world model accuracy.

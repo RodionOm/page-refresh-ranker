@@ -33,7 +33,16 @@ FEATURE_LABELS = {
 def reason_text(feature: str, z: float) -> str:
     """Plain-English reason. z is the standardised value, so we can say high or low."""
     if feature in REASON_TEXT:
-        return REASON_TEXT[feature]
+        labels = {
+            "log_impressions_prev_30d": "recent visibility",
+            "log_impressions_older_30d": "older traffic",
+            "early_momentum": "recent momentum",
+            "content_age_days": "page age",
+            "log_clicks_prev_30d": "recent clicks",
+            "log_clicks_older_30d": "older clicks",
+            "ctr_prev_30d": "click-through rate",
+        }
+        return f"{'above' if z > 0 else 'below'} training mean: {labels[feature]}"
     if feature.startswith("content_type_"):
         return f"content type: {feature[len('content_type_'):]}" if z > 0 else "not a " + feature[len("content_type_"):]
     if feature.startswith("main_intent_"):

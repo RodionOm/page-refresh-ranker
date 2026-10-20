@@ -157,3 +157,37 @@ def test_old_database_is_migrated(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", path)
     run_id = db.create_run("x.csv", 1, 1, 1, [], 0.5)
     assert db.get_run(run_id)["base_rate_observed"] == 0.5
+
+
+@pytest.mark.parametrize("value", [2, -1, 0.5, "unknown"])
+def test_invalid_outcome_is_422(client, value):
+    df = to_prediction_format(make_export(5, seed=1))
+    df["declined_observed"] = value
+    assert upload(client, df.to_csv(index=False).encode()).status_code == 422
+
+
+def test_duplicate_ids_rejected_before_database(client):
+    df = to_prediction_format(make_export(5, seed=1))
+    df["content_id"] = "duplicate"
+    assert upload(client, df.to_csv(index=False).encode()).status_code == 422
+    assert client.post('/api/score', json={'pages': [page_payload(), page_payload()]}).status_code == 422
+
+
+def test_blank_ids_rejected(client):
+    assert client.post('/api/score', json={'pages': [page_payload(content_id=' ')]}).status_code == 422
+
+
+def test_oversize_upload_rejected(client, monkeypatch):
+    monkeypatch.setattr(main, 'MAX_UPLOAD_BYTES', 10)
+    assert upload(client, b'x' * 11).status_code == 413
+
+
+def test_ranking_preserves_close_scores(monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+    monkeypatch.setattr(main, 'get_model', lambda: SimpleNamespace(
+        predict_proba=lambda x: np.array([[0.4999, 0.5001], [0.4998, 0.5002]])))
+    monkeypatch.setattr(main.mdl, 'explain', lambda model, x: [[], []])
+    raw = pd.DataFrame([page_payload(0), page_payload(1)])
+    scored = main.score_frame(raw)
+    assert build_queue(scored, k=1).iloc[0]['content_id'] == 'p1'

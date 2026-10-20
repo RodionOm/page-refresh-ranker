@@ -43,3 +43,9 @@ def test_every_reason_is_plain_text(trained, export_df):
     for row in mdl.explain(trained, build_features(export_df)):
         for text in row:
             assert "_" not in text
+
+
+def test_reason_direction_tracks_actual_feature_value():
+    assert mdl.reason_text('log_impressions_prev_30d', -2).startswith('below')
+    assert mdl.reason_text('log_impressions_prev_30d', 2).startswith('above')
+    assert mdl.reason_text('log_clicks_prev_30d', 2).startswith('above')

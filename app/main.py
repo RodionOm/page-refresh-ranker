@@ -29,6 +29,7 @@ from ranker.schemas import Page, QueueRequest, QueueRow, ScoredPage, ScoreReques
 
 MODEL_PATH = os.getenv("MODEL_PATH", "models/model.joblib")
 MAX_UPLOAD_ROWS = 20_000
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 PAGE_COLUMNS = list(Page.model_fields)
 
 app = FastAPI(title="Page refresh ranker", version="2.0.0")
@@ -56,7 +57,8 @@ def score_frame(raw: pd.DataFrame) -> pd.DataFrame:
     X = build_features(raw)
     model = get_model()
     out = raw[["content_id", "client_id"]].copy()
-    out["score"] = model.predict_proba(X)[:, 1].round(3)
+    # Rank on full precision: rounding creates artificial ties in the top-k queue.
+    out["score"] = model.predict_proba(X)[:, 1]
     out["band"] = [mdl.band(s) for s in out["score"]]
     out["reasons"] = mdl.explain(model, X)
     out["review_flags"] = review_flags(raw, X)
@@ -116,8 +118,15 @@ def parse_csv(content: bytes) -> pd.DataFrame:
     if errors:
         raise HTTPException(status_code=422, detail=errors)
     out = pages_frame(pages)
+    if out["content_id"].duplicated().any():
+        raise HTTPException(status_code=422, detail="content_id must be unique within an upload")
     if "declined_observed" in df.columns:
-        out["observed"] = df["declined_observed"].astype("Int64").tolist()
+        values = pd.to_numeric(df["declined_observed"], errors="coerce")
+        invalid = (df["declined_observed"].notna() & values.isna()) | (values.notna() & ~values.isin([0, 1]))
+        if invalid.any():
+            row = int(invalid.to_numpy().nonzero()[0][0]) + 2
+            raise HTTPException(status_code=422, detail=f"row {row}, declined_observed: expected 0, 1 or blank")
+        out["observed"] = values.astype("Int64").tolist()
     return out
 
 
@@ -125,7 +134,10 @@ def parse_csv(content: bytes) -> pd.DataFrame:
 async def create_run(file: UploadFile = File(...), k: int = Form(50), per_client: int = Form(5)) -> dict:
     if not (1 <= k <= 500 and 1 <= per_client <= 50):
         raise HTTPException(status_code=422, detail="k must be 1-500 and per_client 1-50")
-    raw = parse_csv(await file.read())
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="upload must be at most 10 MiB")
+    raw = parse_csv(content)
     scored = score_frame(raw)
     if "observed" in raw.columns:
         scored["observed"] = [None if pd.isna(v) else int(v) for v in raw["observed"]]
