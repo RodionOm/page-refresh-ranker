@@ -12,6 +12,63 @@ flowchart LR
     T[train.py<br/>grouped CV, holdout] --> M
 ```
 
+[What the code enforces](#what-the-code-enforces) · [How a request flows](#how-a-request-flows) · [How the queue is built](#how-the-queue-is-built) · [Using the website](#using-the-website) · [API](#api) · [Run it locally](#run-it-locally)
+
+> [!IMPORTANT]
+> The screenshot and the demo file use **synthetic pages** with the same columns as the internship data. The real export stays under the programme's data rules and is not in this repository.
+
+## What the code enforces
+
+Each row is a rule, the code that enforces it, and the test that checks it.
+
+| Rule | How the code enforces it | Checked by |
+|---|---|---|
+| No feature sees the label window | features come only from days 61–90 and 31–60; leaky columns are listed and excluded (`ranker/features.py:25`) | `test_no_leaky_columns`, `test_label_window_does_not_change_features` |
+| Serving builds the same 23 columns as training | fixed category lists; one page gives the full column set (`ranker/features.py:39`) | `test_23_features_in_fixed_order`, `test_one_row_gives_the_same_columns` |
+| A model trained on other features never loads | the saved model stores its feature list; `load` raises on a mismatch (`ranker/model.py:89`) | `test_load_rejects_other_feature_list` |
+| Metrics are honest | `GroupKFold` by client, out-of-fold scores (`ranker/model.py:62`); `train.py --holdout` keeps clients out completely | `test_grouped_cv_reports_metrics` |
+| One client cannot fill the queue | sort by score, then at most `per_client` rows per client, then top k (`ranker/review_queue.py:5`) | `test_queue_caps_pages_per_client`, `test_queue_endpoint_caps_clients` |
+| Close scores are not tied by rounding | ranking uses full-precision scores (`app/main.py:56`) | `test_ranking_preserves_close_scores` |
+| Every reason is readable and points the right way | weight × standardised value, positive contributions only, "above/below training mean" (`ranker/model.py:98`) | `test_every_reason_is_plain_text`, `test_reason_direction_tracks_actual_feature_value` |
+| Bad input never reaches the model | Pydantic schema for JSON and CSV rows; errors name the row and field (`ranker/schemas.py`, `app/main.py:95`) | `test_bad_json_is_rejected_with_422`, `test_csv_errors_point_to_the_row` |
+| Uploads are bounded and unique | at most 10 MiB and 20,000 rows; duplicate or blank IDs rejected (`app/main.py:31`) | `test_oversize_upload_rejected`, `test_duplicate_ids_rejected_before_database` |
+| A run is saved whole or not at all | the run and all its results are written in one transaction; deleting a run cascades (`app/db.py:77`) | `test_upload_creates_a_saved_run`, `test_delete_run_cascades` |
+| A reviewer can change an answer | feedback is an upsert on (run, page) (`app/db.py:152`) | `test_feedback_is_upserted_and_summarised` |
+| No model means a clear error, not a crash | `get_model` answers 503 with how to fix it (`app/main.py:39`) | `test_missing_model_gives_503` |
+
+## How a request flows
+
+```mermaid
+flowchart LR
+    U["Browser<br/>upload CSV"] -->|"POST /api/runs"| V{"Valid?<br/>size, columns,<br/>unique IDs, 0/1 labels"}
+    V -->|no| E["422 / 413<br/>error names the row"]
+    V -->|yes| F["23 leakage-safe<br/>features"]
+    F --> M["Logistic regression<br/>score 0-1"]
+    M --> R["Reasons<br/>weight x z-score"]
+    M --> Q["Queue: top k,<br/>max per client"]
+    R --> DB[("SQLite<br/>run + results<br/>one transaction")]
+    Q --> DB
+    DB -->|"GET /api/runs/{id}"| U
+    U -->|"Declined / Held up"| FB["POST feedback<br/>upsert"]
+    FB --> DB
+```
+
+## How the queue is built
+
+```mermaid
+flowchart TD
+    A["All scored pages"] --> B["Sort by score, highest first"]
+    B --> C["Keep at most per_client pages<br/>for each client (default 5)"]
+    C --> D["Take the top k (default 50)"]
+    D --> E{"Score"}
+    E -->|"> 0.7"| H["high"]
+    E -->|"0.5 - 0.7"| M["medium"]
+    E -->|"<= 0.5"| L["low"]
+    D --> F["Review flags: young page, short history,<br/>spike-driven, no keyword data, tiny traffic"]
+```
+
+The bands are ordered, not calibrated probabilities. Review flags do not change the rank; they tell the reviewer when to look twice.
+
 ## Using the website
 
 ![Review queue on synthetic demo data](docs/screenshot.png)
